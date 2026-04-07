@@ -45,10 +45,12 @@ def voxel_downsample(vertices: np.ndarray, colors: np.ndarray, voxel_size: float
     if len(vertices) == 0:
         return vertices, colors, set()
 
-    indices = np.floor(vertices / voxel_size).astype(np.int32)
+    if len(vertices) != len(colors):
+        raise ValueError(f"vertices and colors length mismatch: {len(vertices)} vs {len(colors)}")
+
     seen: dict[tuple, int] = {}
     for i in range(len(vertices)):
-        key = (int(indices[i, 0]), int(indices[i, 1]), int(indices[i, 2]))
+        key = get_voxel_key(float(vertices[i, 0]), float(vertices[i, 1]), float(vertices[i, 2]), voxel_size)
         if key not in seen:
             seen[key] = i
 
@@ -93,6 +95,9 @@ class VoxelTracker:
         if len(vertices) == 0:
             return []
 
+        if len(vertices) != len(colors):
+            raise ValueError(f"vertices and colors length mismatch: {len(vertices)} vs {len(colors)}")
+
         result = []
         for i in range(len(vertices)):
             key = get_voxel_key(
@@ -103,9 +108,9 @@ class VoxelTracker:
             )
             if key not in self._sent:
                 self._sent.add(key)
-                r = int(colors[i, 0] * 255)
-                g = int(colors[i, 1] * 255)
-                b = int(colors[i, 2] * 255)
+                r = int(np.clip(colors[i, 0], 0.0, 1.0) * 255)
+                g = int(np.clip(colors[i, 1], 0.0, 1.0) * 255)
+                b = int(np.clip(colors[i, 2], 0.0, 1.0) * 255)
                 result.append([
                     round(float(vertices[i, 0]), 4),
                     round(float(vertices[i, 1]), 4),
