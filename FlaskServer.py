@@ -240,19 +240,88 @@ def config():
         DEFAULT_TIMEOUT = data.get('timeout', DEFAULT_TIMEOUT)
         TRANSMISSION_MODE = data.get('mode', TRANSMISSION_MODE)
         LORA_DESTINATION = data.get('lora_destination', LORA_DESTINATION)
+        global JETSON_WS_URL
+        new_jetson_url = data.get('jetson_ws_url')
+        if new_jetson_url:
+            JETSON_WS_URL = new_jetson_url
         return jsonify({
             "success": True,
             "server_url": FASTAPI_SERVER_URL,
             "timeout": DEFAULT_TIMEOUT,
             "mode": TRANSMISSION_MODE,
-            "lora_destination": LORA_DESTINATION
+            "lora_destination": LORA_DESTINATION,
+            "jetson_ws_url": JETSON_WS_URL
         })
 
     return jsonify({
         "server_url": FASTAPI_SERVER_URL,
         "timeout": DEFAULT_TIMEOUT,
         "mode": TRANSMISSION_MODE,
-        "lora_destination": LORA_DESTINATION
+        "lora_destination": LORA_DESTINATION,
+        "jetson_ws_url": JETSON_WS_URL
+    })
+
+
+@app.route('/map_stream')
+def map_stream():
+    """SSE endpoint — streams point cloud chunks from Jetson to browser."""
+    client_queue: queue.Queue = queue.Queue(maxsize=200)
+    with _sse_lock:
+        _sse_clients.append(client_queue)
+
+    def generate():
+        try:
+            last_keepalive = time.time()
+            while True:
+                try:
+                    chunk = client_queue.get(timeout=1.0)
+                    yield f"data: {chunk}\n\n"
+                    last_keepalive = time.time()
+                except queue.Empty:
+                    if time.time() - last_keepalive > 15:
+                        yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
+                        last_keepalive = time.time()
+        except GeneratorExit:
+            pass
+        finally:
+            with _sse_lock:
+                try:
+                    _sse_clients.remove(client_queue)
+                except ValueError:
+                    pass
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+
+@app.route('/map_control', methods=['POST'])
+def map_control():
+    """Forward start/stop/clear actions to the Jetson mapper."""
+    global _map_point_count, _map_seq
+
+    data = request.get_json()
+    action = data.get('action')
+
+    if action == 'clear':
+        _map_point_count = 0
+        _map_seq = -1
+
+    if _jetson_ws_connected and _jetson_ws_handle:
+        try:
+            _jetson_ws_handle.send(json.dumps({"action": action}))
+            return jsonify({"success": True, "action": action})
+        except Exception as exc:
+            return jsonify({"success": False, "error": str(exc)}), 500
+
+    return jsonify({"success": False, "error": "Not connected to Jetson"}), 503
+
+
+@app.route('/map_status')
+def map_status():
+    """Return current Jetson connection state and map statistics."""
+    return jsonify({
+        "connected": _jetson_ws_connected,
+        "point_count": _map_point_count,
+        "seq": _map_seq,
     })
 
 
