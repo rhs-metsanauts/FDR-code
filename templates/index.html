@@ -1059,10 +1059,17 @@
             document.getElementById('mapCoverage').textContent = '0.0';
         }
 
+        const ORIN_WS_URL = 'ws://192.168.55.1:9001';
+        let mapWS = null;
+
         function openMapSSE() {
-            if (mapSSE) return;
-            mapSSE = new EventSource('/map_stream');
-            mapSSE.onmessage = function(e) {
+            if (mapWS && mapWS.readyState === WebSocket.OPEN) return;
+            mapWS = new WebSocket(ORIN_WS_URL);
+            mapWS.onopen = function() {
+                document.getElementById('mapStatusDot').className = 'map-status-dot connected';
+                document.getElementById('mapStatusText').textContent = 'CONNECTED';
+            };
+            mapWS.onmessage = function(e) {
                 try {
                     const data = JSON.parse(e.data);
                     if (data.type === 'chunk') {
@@ -1073,16 +1080,20 @@
                     console.warn('[Map] Chunk parse error:', err);
                 }
             };
-            mapSSE.onerror = function() {
+            mapWS.onerror = function() {
+                document.getElementById('mapStatusDot').className = 'map-status-dot disconnected';
+                document.getElementById('mapStatusText').textContent = 'DISCONNECTED';
+            };
+            mapWS.onclose = function() {
                 document.getElementById('mapStatusDot').className = 'map-status-dot disconnected';
                 document.getElementById('mapStatusText').textContent = 'DISCONNECTED';
             };
         }
 
         function closeMapSSE() {
-            if (mapSSE) {
-                mapSSE.close();
-                mapSSE = null;
+            if (mapWS) {
+                mapWS.close();
+                mapWS = null;
             }
         }
 
@@ -1155,32 +1166,26 @@
         }
 
         /* ── Map control buttons ── */
+        function _sendMapAction(action) {
+            if (mapWS && mapWS.readyState === WebSocket.OPEN) {
+                mapWS.send(JSON.stringify({action}));
+            }
+        }
+
         function startMapping() {
             openMapSSE();
-            fetch('/map_control', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: 'start'}),
-            }).catch(() => {});
+            setTimeout(() => _sendMapAction('start'), 300);
             mapStartTime = Date.now();
             if (!mapElapsedTimer) mapElapsedTimer = setInterval(_updateElapsed, 1000);
         }
 
         function stopMapping() {
-            fetch('/map_control', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: 'stop'}),
-            }).catch(() => {});
+            _sendMapAction('stop');
             if (mapElapsedTimer) { clearInterval(mapElapsedTimer); mapElapsedTimer = null; }
         }
 
         function clearMapping() {
-            fetch('/map_control', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({action: 'clear'}),
-            }).catch(() => {});
+            _sendMapAction('clear');
             stopMapping();
             resetPointCloud();
             resetMinimap();
@@ -1235,15 +1240,16 @@
                 .then(data => {
                     const dot = document.getElementById('mapStatusDot');
                     const txt = document.getElementById('mapStatusText');
-                    if (!dot || !txt) return;
 
                     // Map tab status dot
-                    if (data.connected) {
-                        dot.className = 'map-status-dot connected';
-                        txt.textContent = 'CONNECTED';
-                    } else {
-                        dot.className = 'map-status-dot disconnected';
-                        txt.textContent = 'DISCONNECTED';
+                    if (dot && txt) {
+                        if (data.connected) {
+                            dot.className = 'map-status-dot connected';
+                            txt.textContent = 'CONNECTED';
+                        } else {
+                            dot.className = 'map-status-dot disconnected';
+                            txt.textContent = 'DISCONNECTED';
+                        }
                     }
 
                     // Jetson device card
@@ -1395,6 +1401,9 @@
                 // Update jetson address display
                 const jWs = document.getElementById('jetsonWsText');
                 if (jWs && jetsonWs) jWs.textContent = jetsonWs.replace('ws://', '').split(':')[0] + ':9001';
+            }).catch(() => {
+                const btn = document.querySelector('.config-save-btn');
+                if (btn) { btn.textContent = 'Error'; setTimeout(() => { btn.textContent = 'Save Config'; }, 1500); }
             });
         }
 
